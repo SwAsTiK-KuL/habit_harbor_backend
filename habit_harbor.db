@@ -1,0 +1,25 @@
+{
+  "users": [],
+  "sessions": [],
+  "loginAttempts": [
+    {
+      "id": "1768478709358ukq9vxxzj",
+      "email": "testing@yopmail.com",
+      "ip_address": "::ffff:10.121.108.143",
+      "success": false,
+      "attempted_at": "2026-01-15T12:05:09.360Z"
+    },
+    {
+      "id": "1768479355908qka3t141d",
+      "email": "testing@yopmail.com",
+      "ip_address": "::ffff:10.121.108.143",
+      "success": false,
+      "attempted_at": "2026-01-15T12:15:55.908Z"
+    }
+  ],
+  "goals": [],
+  "goalLogs": [],
+  "metadata": {
+    "lastAutoCompletionDate": "2026-01-15"
+  }
+}

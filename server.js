@@ -97,8 +97,8 @@ class AutoCompletionManager {
       }
     });
 
-    console.log(`✅ Processed ${dateStr}: ${missedCount} goals auto-missed`);
-    return missedCount;
+    console.log(`✅ Processed ${dateStr}: ${completedCount} goals auto-completed`);
+    return completedCount;
   }
 
   processMissedDays() {

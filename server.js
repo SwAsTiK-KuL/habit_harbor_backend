@@ -17,7 +17,8 @@ const config = {
   jwtSecret: process.env.JWT_SECRET || 'fallback-dev-secret-key-never-use-in-production',
   jwtExpire: process.env.JWT_EXPIRE || '7d',
   bcryptRounds: parseInt(process.env.BCRYPT_ROUNDS) || 12,
-  dbName: process.env.DATABASE_PATH || 'login_system.db'
+//  dbName: process.env.DATABASE_PATH || 'login_system.db'
+  dbName: process.env.DATABASE_PATH || 'habit_harbor.db'
 };
 
 // Security warning for development
@@ -266,6 +267,7 @@ loadFromFile() {
     }
     return user;
   }
+
 
   emailExists(email) {
     return this.data.users.some(user => user.email === email);
@@ -766,6 +768,11 @@ app.post('/api/auth/login',
           message: 'Invalid credentials'
         });
       }
+
+      console.log('🔍 Debug - User found:', !!user);
+      console.log('🔍 Debug - Email match:', user?.email === email);
+      console.log('🔍 Debug - User active:', user?.is_active);
+      console.log('🔍 Debug - Password provided length:', password?.length);
 
       const isValidPassword = await bcrypt.compare(password, user.password_hash);
       if (!isValidPassword) {

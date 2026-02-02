@@ -1,6 +1,38 @@
 {
-  "users": [],
-  "sessions": [],
+  "users": [
+    {
+      "id": "1769695913750be2zt4ys4",
+      "username": "Testing",
+      "email": "testing@yopmail.com",
+      "password_hash": "$2a$12$7xcm.opPnaaMck.cEpDELO0QJyMiXyhfC4VAjZWE3Kbpbm0nqBFaG",
+      "first_name": "Testing",
+      "last_name": "Testing",
+      "is_active": true,
+      "created_at": "2026-01-29T14:11:53.750Z",
+      "updated_at": "2026-01-29T14:11:53.750Z",
+      "last_login": "2026-01-29T14:33:27.482Z"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "17696970390474b7wjm4tt",
+      "user_id": "1769695913750be2zt4ys4",
+      "token_hash": "fd59330ae61376a707fbccc07c50f757103a420b0da2dff312c6f74df747deaf",
+      "expires_at": "2026-02-05T14:30:39.047Z",
+      "created_at": "2026-01-29T14:30:39.047Z",
+      "ip_address": "::1",
+      "user_agent": "PostmanRuntime/7.51.0"
+    },
+    {
+      "id": "1769697207520f8z0amji8",
+      "user_id": "1769695913750be2zt4ys4",
+      "token_hash": "7cd7839618d90ab69e7dfb3ae0f25ab18b8fadea85a83156b8e8971d69883551",
+      "expires_at": "2026-02-05T14:33:27.520Z",
+      "created_at": "2026-01-29T14:33:27.521Z",
+      "ip_address": "::ffff:127.0.0.1",
+      "user_agent": "Dart/3.7 (dart:io)"
+    }
+  ],
   "loginAttempts": [
     {
       "id": "1768478709358ukq9vxxzj",
@@ -15,11 +47,120 @@
       "ip_address": "::ffff:10.121.108.143",
       "success": false,
       "attempted_at": "2026-01-15T12:15:55.908Z"
+    },
+    {
+      "id": "1769694761291rwqkqn47q",
+      "email": "testing@yopmail.com",
+      "ip_address": "::ffff:127.0.0.1",
+      "success": false,
+      "attempted_at": "2026-01-29T13:52:41.292Z"
+    },
+    {
+      "id": "1769695135184580kil07m",
+      "email": "testing@yopmail.com",
+      "ip_address": "::ffff:127.0.0.1",
+      "success": false,
+      "attempted_at": "2026-01-29T13:58:55.184Z"
+    },
+    {
+      "id": "1769695351400rwyflph45",
+      "email": "testing@yopmail.com",
+      "ip_address": "::ffff:127.0.0.1",
+      "success": false,
+      "attempted_at": "2026-01-29T14:02:31.400Z"
+    },
+    {
+      "id": "1769695939270m915bgzp6",
+      "email": "testing@yopmail.com",
+      "ip_address": "::ffff:127.0.0.1",
+      "success": false,
+      "attempted_at": "2026-01-29T14:12:19.270Z"
+    },
+    {
+      "id": "1769695939978tykxevtqq",
+      "email": "testing@yopmail.com",
+      "ip_address": "::ffff:127.0.0.1",
+      "success": true,
+      "attempted_at": "2026-01-29T14:12:19.978Z"
+    },
+    {
+      "id": "17696970385414vwj15gsh",
+      "email": "testing@yopmail.com",
+      "ip_address": "::1",
+      "success": false,
+      "attempted_at": "2026-01-29T14:30:38.541Z"
+    },
+    {
+      "id": "1769697039041hdxbt9mi8",
+      "email": "testing@yopmail.com",
+      "ip_address": "::1",
+      "success": true,
+      "attempted_at": "2026-01-29T14:30:39.041Z"
+    },
+    {
+      "id": "176969720688052y89wtue",
+      "email": "testing@yopmail.com",
+      "ip_address": "::ffff:127.0.0.1",
+      "success": false,
+      "attempted_at": "2026-01-29T14:33:26.880Z"
+    },
+    {
+      "id": "1769697207484ga37rdu31",
+      "email": "testing@yopmail.com",
+      "ip_address": "::ffff:127.0.0.1",
+      "success": true,
+      "attempted_at": "2026-01-29T14:33:27.484Z"
     }
   ],
-  "goals": [],
-  "goalLogs": [],
+  "goals": [
+    {
+      "id": "goal_17696961554988k3y2iizd",
+      "user_id": "1769695913750be2zt4ys4",
+      "title": "Testing",
+      "description": "Testin g FOr Account Deleting",
+      "category": "Learning",
+      "color": "#4CAF50",
+      "icon": "fitness",
+      "target_frequency": "daily",
+      "target_count": 1,
+      "is_active": true,
+      "created_at": "2026-01-29T14:15:55.498Z",
+      "updated_at": "2026-01-29T14:15:55.498Z"
+    }
+  ],
+  "goalLogs": [
+    {
+      "id": "log_17700454809530eijsl0d0",
+      "goal_id": "goal_17696961554988k3y2iizd",
+      "user_id": "1769695913750be2zt4ys4",
+      "date": "2026-01-30",
+      "status": "completed",
+      "notes": "Auto-marked as completed",
+      "created_at": "2026-02-02T15:18:00.953Z",
+      "updated_at": "2026-02-02T15:18:00.954Z"
+    },
+    {
+      "id": "log_17700454809587xkbr774w",
+      "goal_id": "goal_17696961554988k3y2iizd",
+      "user_id": "1769695913750be2zt4ys4",
+      "date": "2026-01-31",
+      "status": "completed",
+      "notes": "Auto-marked as completed",
+      "created_at": "2026-02-02T15:18:00.958Z",
+      "updated_at": "2026-02-02T15:18:00.958Z"
+    },
+    {
+      "id": "log_1770045480973kme7b6dfa",
+      "goal_id": "goal_17696961554988k3y2iizd",
+      "user_id": "1769695913750be2zt4ys4",
+      "date": "2026-02-01",
+      "status": "completed",
+      "notes": "Auto-marked as completed",
+      "created_at": "2026-02-02T15:18:00.973Z",
+      "updated_at": "2026-02-02T15:18:00.973Z"
+    }
+  ],
   "metadata": {
-    "lastAutoCompletionDate": "2026-01-18"
+    "lastAutoCompletionDate": "2026-02-02"
   }
 }

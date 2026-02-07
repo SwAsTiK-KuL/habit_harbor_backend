@@ -4,36 +4,33 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
+const db = require('./mongodb');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Configuration
-// Configuration
 const config = {
   jwtSecret: process.env.JWT_SECRET || 'fallback-dev-secret-key-never-use-in-production',
   jwtExpire: process.env.JWT_EXPIRE || '7d',
   bcryptRounds: parseInt(process.env.BCRYPT_ROUNDS) || 12,
-//  dbName: process.env.DATABASE_PATH || 'login_system.db'
-  dbName: process.env.DATABASE_PATH || 'habit_harbor.db'
 };
 
-// Security warning for development
 // Security validation for production
 if (process.env.NODE_ENV === 'production') {
   if (!process.env.JWT_SECRET) {
     console.warn('⚠️  WARNING: JWT_SECRET not set, using fallback secret');
-    console.warn('⚠️  Please set JWT_SECRET in Railway dashboard');
-    // Don't exit - let server continue with fallback secret
+    console.warn('⚠️  Please set JWT_SECRET in environment variables');
   } else {
     console.log('✅ Production security checks passed');
   }
 }
 
-//Auto Completion Manager Class
+// ============================================
+// AUTO COMPLETION MANAGER CLASS
+// ============================================
+
 class AutoCompletionManager {
   constructor(db) {
     this.db = db;
@@ -41,18 +38,14 @@ class AutoCompletionManager {
     this.isProcessing = false;
   }
 
-  loadLastProcessedDate() {
-    const metaData = this.db.data.metadata || {};
-    this.lastProcessedDate = metaData.lastAutoCompletionDate || null;
+  async loadLastProcessedDate() {
+    const lastDate = await this.db.getMetadata('lastAutoCompletionDate');
+    this.lastProcessedDate = lastDate;
     console.log(`📅 Last auto-completion: ${this.lastProcessedDate || 'Never'}`);
   }
 
-  saveLastProcessedDate(date) {
-    if (!this.db.data.metadata) {
-      this.db.data.metadata = {};
-    }
-    this.db.data.metadata.lastAutoCompletionDate = date;
-    this.db.saveToFile();
+  async saveLastProcessedDate(date) {
+    await this.db.setMetadata('lastAutoCompletionDate', date);
     this.lastProcessedDate = date;
   }
 
@@ -68,25 +61,22 @@ class AutoCompletionManager {
     return date.toISOString().split('T')[0];
   }
 
-  processDate(dateStr) {
+  async processDate(dateStr) {
     console.log(`🕛 Processing auto-completion for ${dateStr}`);
 
-    const allGoals = this.db.data.goals.filter(goal => goal.is_active);
+    const allGoals = await this.db.getAllActiveGoals();
     let completedCount = 0;
 
-    allGoals.forEach(goal => {
-      const goalCreatedDate = goal.created_at.split('T')[0];
+    for (const goal of allGoals) {
+      const goalCreatedDate = goal.created_at.toISOString().split('T')[0];
       if (goalCreatedDate > dateStr) {
-        return;
+        continue;
       }
 
-      const existingLog = this.db.data.goalLogs.find(log =>
-        log.goal_id === goal.id &&
-        log.date === dateStr
-      );
+      const existingLog = await this.db.findGoalLog(goal.id, dateStr);
 
       if (!existingLog) {
-        this.db.createGoalLog({
+        await this.db.createGoalLog({
           goal_id: goal.id,
           user_id: goal.user_id,
           status: 'completed',
@@ -96,34 +86,32 @@ class AutoCompletionManager {
 
         completedCount++;
       }
-    });
+    }
 
     console.log(`✅ Processed ${dateStr}: ${completedCount} goals auto-completed`);
     return completedCount;
   }
 
-  processMissedDays() {
+  async processMissedDays() {
     const today = new Date().toISOString().split('T')[0];
 
     if (this.lastProcessedDate === null) {
-      // First run - only process yesterday
       const yesterday = this.getYesterdayDate();
-      this.processDate(yesterday);
-      this.saveLastProcessedDate(today);
+      await this.processDate(yesterday);
+      await this.saveLastProcessedDate(today);
       return;
     }
 
-    // ✅ Process all dates between lastProcessedDate and yesterday
     const yesterday = this.getYesterdayDate();
     let currentDate = this.addDays(this.lastProcessedDate, 1);
 
     while (currentDate <= yesterday) {
       console.log(`📅 Catching up missed date: ${currentDate}`);
-      this.processDate(currentDate);
+      await this.processDate(currentDate);
       currentDate = this.addDays(currentDate, 1);
     }
 
-    this.saveLastProcessedDate(today);
+    await this.saveLastProcessedDate(today);
   }
 
   startScheduler() {
@@ -131,37 +119,36 @@ class AutoCompletionManager {
 
     this.loadLastProcessedDate();
 
-    // ✅ Check every hour (low CPU usage)
     setInterval(() => {
       if (this.isProcessing) return;
 
       const now = new Date();
       const today = now.toISOString().split('T')[0];
 
-      // Run once per day between midnight and 1 AM
       if (this.lastProcessedDate !== today && now.getHours() === 0) {
         this.isProcessing = true;
-        try {
-          this.processMissedDays();
-        } catch (error) {
-          console.error('❌ Auto-completion error:', error);
-        } finally {
-          this.isProcessing = false;
-        }
+        this.processMissedDays()
+          .then(() => {
+            this.isProcessing = false;
+          })
+          .catch((error) => {
+            console.error('❌ Auto-completion error:', error);
+            this.isProcessing = false;
+          });
       }
-    }, 3600000); // Check every hour
+    }, 3600000);
 
-    // ✅ Run on startup to catch up
     setTimeout(() => {
       if (!this.isProcessing) {
         this.isProcessing = true;
-        try {
-          this.processMissedDays();
-        } catch (error) {
-          console.error('❌ Startup auto-completion error:', error);
-        } finally {
-          this.isProcessing = false;
-        }
+        this.processMissedDays()
+          .then(() => {
+            this.isProcessing = false;
+          })
+          .catch((error) => {
+            console.error('❌ Startup auto-completion error:', error);
+            this.isProcessing = false;
+          });
       }
     }, 5000);
 
@@ -169,315 +156,8 @@ class AutoCompletionManager {
   }
 }
 
-
-// Enhanced SQLite implementation with goals support
-class SimpleDB {
-  constructor(dbPath) {
-      this.dbPath = dbPath;
-      this.data = {
-        users: [],
-        sessions: [],
-        loginAttempts: [],
-        goals: [],
-        goalLogs: [],
-        metadata: {} // ✅ Add this
-      };
-      this.loadFromFile();
-  }
-
-
-loadFromFile() {
-    try {
-      if (fs.existsSync(this.dbPath)) {
-        const fileData = fs.readFileSync(this.dbPath, 'utf8');
-        const loadedData = JSON.parse(fileData);
-
-        this.data = {
-          users: loadedData.users || [],
-          sessions: loadedData.sessions || [],
-          loginAttempts: loadedData.loginAttempts || [],
-          goals: loadedData.goals || [],
-          goalLogs: loadedData.goalLogs || [],
-          metadata: loadedData.metadata || {} // ✅ Add this
-        };
-      }
-    } catch (error) {
-      console.log('Creating new database...');
-      this.data = {
-        users: [],
-        sessions: [],
-        loginAttempts: [],
-        goals: [],
-        goalLogs: [],
-        metadata: {}
-      };
-    }
-  }
-
-  saveToFile() {
-    try {
-      fs.writeFileSync(this.dbPath, JSON.stringify(this.data, null, 2));
-      console.log(`💾 Database saved with ${this.data.goals.length} goals`);
-    } catch (error) {
-      console.error('Error saving database:', error);
-    }
-  }
-
-  generateId() {
-    return Date.now() + Math.random().toString(36).substr(2, 9);
-  }
-
-  // User operations (existing code)
-  createUser(userData) {
-    const user = {
-      id: this.generateId(),
-      username: userData.username,
-      email: userData.email,
-      password_hash: userData.password_hash,
-      first_name: userData.first_name || null,
-      last_name: userData.last_name || null,
-      is_active: true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      last_login: null
-    };
-
-    this.data.users.push(user);
-    this.saveToFile();
-    return user;
-  }
-
-  findUserByEmail(email) {
-    return this.data.users.find(user => user.email === email && user.is_active);
-  }
-
-  findUserByUsername(username) {
-    return this.data.users.find(user => user.username === username && user.is_active);
-  }
-
-  findUserById(id) {
-    return this.data.users.find(user => user.id == id && user.is_active);
-  }
-
-  updateUserLastLogin(userId) {
-    const user = this.findUserById(userId);
-    if (user) {
-      user.last_login = new Date().toISOString();
-      this.saveToFile();
-    }
-    return user;
-  }
-
-
-  emailExists(email) {
-    return this.data.users.some(user => user.email === email);
-  }
-
-  usernameExists(username) {
-    return this.data.users.some(user => user.username === username);
-  }
-
-  // Session operations (existing code)
-  createSession(sessionData) {
-    const session = {
-      id: this.generateId(),
-      user_id: sessionData.user_id,
-      token_hash: sessionData.token_hash,
-      expires_at: sessionData.expires_at,
-      created_at: new Date().toISOString(),
-      ip_address: sessionData.ip_address,
-      user_agent: sessionData.user_agent
-    };
-
-    this.data.sessions.push(session);
-    this.saveToFile();
-    return session;
-  }
-
-  deleteSession(tokenHash) {
-    this.data.sessions = this.data.sessions.filter(session => session.token_hash !== tokenHash);
-    this.saveToFile();
-  }
-
-  // Login attempts (existing code)
-  logLoginAttempt(email, ipAddress, success) {
-    const attempt = {
-      id: this.generateId(),
-      email: email,
-      ip_address: ipAddress,
-      success: success,
-      attempted_at: new Date().toISOString()
-    };
-
-    this.data.loginAttempts.push(attempt);
-    this.saveToFile();
-    return attempt;
-  }
-
-  getLoginAttempts(email = null, limit = 10) {
-    let attempts = this.data.loginAttempts;
-
-    if (email) {
-      attempts = attempts.filter(attempt => attempt.email === email);
-    }
-
-    return attempts
-      .sort((a, b) => new Date(b.attempted_at) - new Date(a.attempted_at))
-      .slice(0, limit);
-  }
-
-  // ✅ NEW: Goal operations
-  createGoal(goalData) {
-    const goal = {
-      id: 'goal_' + Date.now() + Math.random().toString(36).substr(2, 9),
-      user_id: goalData.user_id,
-      title: goalData.title,
-      description: goalData.description || '',
-      category: goalData.category || 'General',
-      color: goalData.color || '#4CAF50',
-      icon: goalData.icon || 'star',
-      target_frequency: goalData.target_frequency || 'daily',
-      target_count: goalData.target_count || 1,
-      is_active: true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-
-    this.data.goals.push(goal);
-    this.saveToFile();
-    console.log(`✅ Goal created: ${goal.title} for user ${goal.user_id}`);
-    return goal;
-  }
-
-  getGoalsByUserId(userId) {
-    const userGoals = this.data.goals.filter(goal => goal.user_id === userId && goal.is_active);
-
-    // ✅ Add today's status for each goal
-    const today = new Date().toISOString().split('T')[0];
-    const enrichedGoals = userGoals.map(goal => {
-      const todayLog = this.data.goalLogs.find(log =>
-        log.goal_id === goal.id &&
-        log.date === today
-      );
-
-      return {
-        ...goal,
-        todayStatus: todayLog ? todayLog.status : null,
-        todayLogId: todayLog ? todayLog.id : null
-      };
-    });
-
-    console.log(`📋 Retrieved ${enrichedGoals.length} goals for user ${userId}`);
-    return enrichedGoals;
-  }
-
-  findGoalById(goalId) {
-    return this.data.goals.find(goal => goal.id === goalId && goal.is_active);
-  }
-
-  updateGoal(goalId, updates) {
-    const goalIndex = this.data.goals.findIndex(goal => goal.id === goalId && goal.is_active);
-
-    if (goalIndex === -1) {
-      return null;
-    }
-
-    this.data.goals[goalIndex] = {
-      ...this.data.goals[goalIndex],
-      ...updates,
-      updated_at: new Date().toISOString()
-    };
-
-    this.saveToFile();
-    console.log(`✅ Goal updated: ${goalId}`);
-    return this.data.goals[goalIndex];
-  }
-
-  deleteGoal(goalId, userId) {
-    const goalIndex = this.data.goals.findIndex(goal =>
-      goal.id === goalId && goal.user_id === userId && goal.is_active
-    );
-
-    if (goalIndex === -1) {
-      return false;
-    }
-
-    this.data.goals[goalIndex].is_active = false;
-    this.data.goals[goalIndex].updated_at = new Date().toISOString();
-    this.saveToFile();
-    console.log(`✅ Goal deleted: ${goalId}`);
-    return true;
-  }
-
-  // ✅ NEW: Goal log operations
-  createGoalLog(logData) {
-    const log = {
-      id: 'log_' + Date.now() + Math.random().toString(36).substr(2, 9),
-      goal_id: logData.goal_id,
-      user_id: logData.user_id,
-      date: logData.date || new Date().toISOString().split('T')[0],
-      status: logData.status,
-      notes: logData.notes || '',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-
-    this.data.goalLogs.push(log);
-    this.saveToFile();
-    console.log(`✅ Goal log created: ${log.status} for goal ${log.goal_id}`);
-    return log;
-  }
-
-  getGoalLogsByGoalId(goalId, limit = 30) {
-    return this.data.goalLogs
-      .filter(log => log.goal_id === goalId)
-      .sort((a, b) => new Date(b.date) - new Date(a.date))
-      .slice(0, limit);
-  }
-
-}
-
-function autoCompleteYesterdayGoals() {
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().split('T')[0]; // YYYY-MM-DD format
-
-  console.log(`🕛 Running midnight auto-completion for ${yesterdayStr}`);
-
-  // Get all active goals
-  const allGoals = db.data.goals.filter(goal => goal.is_active);
-  let autoCompletedCount = 0;
-
-  allGoals.forEach(goal => {
-    // Check if there's already a log for yesterday
-    const existingLog = db.data.goalLogs.find(log =>
-      log.goal_id === goal.id &&
-      log.date === yesterdayStr
-    );
-
-    if (!existingLog) {
-      // No log exists for yesterday - auto-complete it
-      const autoLog = db.createGoalLog({
-        goal_id: goal.id,
-        user_id: goal.user_id,
-        status: 'completed',
-        date: yesterdayStr,
-        notes: 'Auto-completed at midnight'
-      });
-
-      autoCompletedCount++;
-      console.log(`✅ Auto-completed: ${goal.title} for ${yesterdayStr}`);
-    }
-  });
-
-  console.log(`🎉 Midnight auto-completion finished: ${autoCompletedCount} goals completed for ${yesterdayStr}`);
-  return autoCompletedCount;
-}
-
-
-
 // Initialize database
-const db = new SimpleDB(path.join(__dirname, config.dbName));
+const db = require('./mongodb');
 
 const autoCompletionManager = new AutoCompletionManager(db);
 autoCompletionManager.startScheduler();
@@ -495,7 +175,6 @@ const createRateLimit = (store, windowMs, max) => {
     const ip = req.ip || req.connection.remoteAddress;
     const now = Date.now();
 
-    // Clean old entries
     for (const [key, data] of store.entries()) {
       if (data.resetTime < now) {
         store.delete(key);
@@ -559,7 +238,7 @@ const verifyToken = (token) => {
 };
 
 // Authentication middleware
-const authenticateToken = (req, res, next) => {
+const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
@@ -578,7 +257,7 @@ const authenticateToken = (req, res, next) => {
     });
   }
 
-  const user = db.findUserById(decoded.userId);
+  const user = await db.findUserById(decoded.userId);
   if (!user) {
     return res.status(401).json({
       success: false,
@@ -619,24 +298,23 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.set('trust proxy', 1);
 
-// Apply rate limiting
 app.use(createRateLimit(rateLimitStore.general, 15 * 60 * 1000, 100));
 
-// Routes
+// ============================================
+// ROUTES
+// ============================================
 
-// Root endpoint
 app.get('/', (req, res) => {
   res.json({
     success: true,
-    message: 'Login Backend API with Goals',
-    version: '1.0.0',
+    message: 'Habit Harbor API with MongoDB',
+    version: '2.0.0',
     endpoints: {
       register: 'POST /api/auth/register',
       login: 'POST /api/auth/login',
       profile: 'GET /api/auth/profile',
       logout: 'POST /api/auth/logout',
       verifyToken: 'GET /api/auth/verify-token',
-      loginAttempts: 'GET /api/auth/login-attempts',
       health: 'GET /api/auth/health',
       goals: 'GET /api/goals',
       createGoal: 'POST /api/goals',
@@ -646,7 +324,7 @@ app.get('/', (req, res) => {
   });
 });
 
-// Register endpoint (existing code)
+// Register endpoint
 app.post('/api/auth/register',
   createRateLimit(rateLimitStore.register, 60 * 60 * 1000, 3),
   async (req, res) => {
@@ -690,14 +368,14 @@ app.post('/api/auth/register',
         });
       }
 
-      if (db.emailExists(email)) {
+      if (await db.emailExists(email)) {
         return res.status(409).json({
           success: false,
           message: 'Email already registered'
         });
       }
 
-      if (db.usernameExists(username)) {
+      if (await db.usernameExists(username)) {
         return res.status(409).json({
           success: false,
           message: 'Username already taken'
@@ -706,7 +384,7 @@ app.post('/api/auth/register',
 
       const hashedPassword = await bcrypt.hash(password, config.bcryptRounds);
 
-      const newUser = db.createUser({
+      const newUser = await db.createUser({
         username,
         email,
         password_hash: hashedPassword,
@@ -736,7 +414,7 @@ app.post('/api/auth/register',
     }
   });
 
-// Login endpoint (existing code)
+// Login endpoint
 app.post('/api/auth/login',
   createRateLimit(rateLimitStore.auth, 15 * 60 * 1000, 5),
   async (req, res) => {
@@ -759,20 +437,15 @@ app.post('/api/auth/login',
         });
       }
 
-      db.logLoginAttempt(email, clientIp, false);
+      await db.logLoginAttempt(email, clientIp, false);
 
-      const user = db.findUserByEmail(email);
+      const user = await db.findUserByEmail(email);
       if (!user) {
         return res.status(401).json({
           success: false,
           message: 'Invalid credentials'
         });
       }
-
-      console.log('🔍 Debug - User found:', !!user);
-      console.log('🔍 Debug - Email match:', user?.email === email);
-      console.log('🔍 Debug - User active:', user?.is_active);
-      console.log('🔍 Debug - Password provided length:', password?.length);
 
       const isValidPassword = await bcrypt.compare(password, user.password_hash);
       if (!isValidPassword) {
@@ -782,15 +455,15 @@ app.post('/api/auth/login',
         });
       }
 
-      db.updateUserLastLogin(user.id);
-      db.logLoginAttempt(email, clientIp, true);
+      await db.updateUserLastLogin(user.id);
+      await db.logLoginAttempt(email, clientIp, true);
 
       const token = generateToken(user.id);
 
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7);
 
-      db.createSession({
+      await db.createSession({
         user_id: user.id,
         token_hash: createSessionHash(token),
         expires_at: expiresAt.toISOString(),
@@ -818,8 +491,8 @@ app.post('/api/auth/login',
     }
   });
 
-// Get profile endpoint (existing code)
-app.get('/api/auth/profile', authenticateToken, (req, res) => {
+// Get profile endpoint
+app.get('/api/auth/profile', authenticateToken, async (req, res) => {
   try {
     res.json({
       success: true,
@@ -836,8 +509,8 @@ app.get('/api/auth/profile', authenticateToken, (req, res) => {
   }
 });
 
-// Verify token endpoint (existing code)
-app.get('/api/auth/verify-token', authenticateToken, (req, res) => {
+// Verify token endpoint
+app.get('/api/auth/verify-token', authenticateToken, async (req, res) => {
   try {
     res.json({
       success: true,
@@ -855,15 +528,15 @@ app.get('/api/auth/verify-token', authenticateToken, (req, res) => {
   }
 });
 
-// Logout endpoint (existing code)
-app.post('/api/auth/logout', authenticateToken, (req, res) => {
+// Logout endpoint
+app.post('/api/auth/logout', authenticateToken, async (req, res) => {
   try {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
 
     if (token) {
       const tokenHash = createSessionHash(token);
-      db.deleteSession(tokenHash);
+      await db.deleteSession(tokenHash);
     }
 
     res.json({
@@ -879,11 +552,11 @@ app.post('/api/auth/logout', authenticateToken, (req, res) => {
   }
 });
 
-// Get login attempts endpoint (existing code)
-app.get('/api/auth/login-attempts', authenticateToken, (req, res) => {
+// Get login attempts endpoint
+app.get('/api/auth/login-attempts', authenticateToken, async (req, res) => {
   try {
     const { email, limit = 10 } = req.query;
-    const attempts = db.getLoginAttempts(email, parseInt(limit));
+    const attempts = await db.getLoginAttempts(email, parseInt(limit));
 
     res.json({
       success: true,
@@ -916,15 +589,15 @@ app.get('/health', (req, res) => {
   });
 });
 
-// ===========================
-// ✅ ENHANCED GOALS ENDPOINTS
-// ===========================
+// ============================================
+// GOALS ENDPOINTS
+// ============================================
 
 // Get all goals for authenticated user
-app.get('/api/goals', authenticateToken, (req, res) => {
+app.get('/api/goals', authenticateToken, async (req, res) => {
   try {
     console.log(`📋 Getting goals for user: ${req.user.id}`);
-    const userGoals = db.getGoalsByUserId(req.user.id);
+    const userGoals = await db.getGoalsByUserId(req.user.id);
 
     res.json({
       success: true,
@@ -939,8 +612,8 @@ app.get('/api/goals', authenticateToken, (req, res) => {
   }
 });
 
-// ✅ FIXED: Create goal with proper validation and persistence
-app.post('/api/goals', authenticateToken, (req, res) => {
+// Create goal
+app.post('/api/goals', authenticateToken, async (req, res) => {
   try {
     console.log('🔵 Create goal request received');
     console.log('📋 Request body:', req.body);
@@ -948,7 +621,6 @@ app.post('/api/goals', authenticateToken, (req, res) => {
 
     const { title, description, category, color, icon, target_frequency, target_count } = req.body;
 
-    // Validation
     if (!title || title.trim().length === 0) {
       console.log('❌ Title validation failed');
       return res.status(400).json({
@@ -964,8 +636,7 @@ app.post('/api/goals', authenticateToken, (req, res) => {
       });
     }
 
-    // Create goal with proper data structure
-    const newGoal = db.createGoal({
+    const newGoal = await db.createGoal({
       user_id: req.user.id,
       title: title.trim(),
       description: description?.trim() || '',
@@ -993,10 +664,10 @@ app.post('/api/goals', authenticateToken, (req, res) => {
 });
 
 // Get goal by ID
-app.get('/api/goals/:goalId', authenticateToken, (req, res) => {
+app.get('/api/goals/:goalId', authenticateToken, async (req, res) => {
   try {
     const { goalId } = req.params;
-    const goal = db.findGoalById(goalId);
+    const goal = await db.findGoalById(goalId);
 
     if (!goal || goal.user_id !== req.user.id) {
       return res.status(404).json({
@@ -1019,13 +690,12 @@ app.get('/api/goals/:goalId', authenticateToken, (req, res) => {
 });
 
 // Update goal
-app.put('/api/goals/:goalId', authenticateToken, (req, res) => {
+app.put('/api/goals/:goalId', authenticateToken, async (req, res) => {
   try {
     const { goalId } = req.params;
     const updates = req.body;
 
-    // Check if goal belongs to user
-    const existingGoal = db.findGoalById(goalId);
+    const existingGoal = await db.findGoalById(goalId);
     if (!existingGoal || existingGoal.user_id !== req.user.id) {
       return res.status(404).json({
         success: false,
@@ -1033,7 +703,7 @@ app.put('/api/goals/:goalId', authenticateToken, (req, res) => {
       });
     }
 
-    const updatedGoal = db.updateGoal(goalId, updates);
+    const updatedGoal = await db.updateGoal(goalId, updates);
 
     res.json({
       success: true,
@@ -1050,11 +720,11 @@ app.put('/api/goals/:goalId', authenticateToken, (req, res) => {
 });
 
 // Delete goal
-app.delete('/api/goals/:goalId', authenticateToken, (req, res) => {
+app.delete('/api/goals/:goalId', authenticateToken, async (req, res) => {
   try {
     const { goalId } = req.params;
 
-    const deleted = db.deleteGoal(goalId, req.user.id);
+    const deleted = await db.deleteGoal(goalId, req.user.id);
 
     if (!deleted) {
       return res.status(404).json({
@@ -1076,14 +746,13 @@ app.delete('/api/goals/:goalId', authenticateToken, (req, res) => {
   }
 });
 
-// Get goal stats (enhanced with real data)
-app.get('/api/goals/:goalId/stats', authenticateToken, (req, res) => {
+// Get goal stats
+app.get('/api/goals/:goalId/stats', authenticateToken, async (req, res) => {
   try {
     const { goalId } = req.params;
     const { days = 30 } = req.query;
 
-    // Check if goal belongs to user
-    const goal = db.findGoalById(goalId);
+    const goal = await db.findGoalById(goalId);
     if (!goal || goal.user_id !== req.user.id) {
       return res.status(404).json({
         success: false,
@@ -1091,10 +760,8 @@ app.get('/api/goals/:goalId/stats', authenticateToken, (req, res) => {
       });
     }
 
-    // Get logs for calculation
-    const logs = db.getGoalLogsByGoalId(goalId, parseInt(days));
+    const logs = await db.getGoalLogsByGoalId(goalId, parseInt(days));
 
-    // Calculate stats
     const completed = logs.filter(log => log.status === 'completed').length;
     const missed = logs.filter(log => log.status === 'missed').length;
     const holiday = logs.filter(log => log.status === 'holiday').length;
@@ -1112,8 +779,8 @@ app.get('/api/goals/:goalId/stats', authenticateToken, (req, res) => {
       sick,
       skipped,
       completion_rate: completionRate,
-      current_streak: 3, // This would need streak calculation logic
-      longest_streak: 8  // This would need streak calculation logic
+      current_streak: 0,
+      longest_streak: 0
     };
 
     res.json({
@@ -1130,13 +797,12 @@ app.get('/api/goals/:goalId/stats', authenticateToken, (req, res) => {
 });
 
 // Log goal status
-app.post('/api/goals/:goalId/logs', authenticateToken, (req, res) => {
+app.post('/api/goals/:goalId/logs', authenticateToken, async (req, res) => {
   try {
     const { goalId } = req.params;
     const { status, date, notes } = req.body;
 
-    // Check if goal belongs to user
-    const goal = db.findGoalById(goalId);
+    const goal = await db.findGoalById(goalId);
     if (!goal || goal.user_id !== req.user.id) {
       return res.status(404).json({
         success: false,
@@ -1159,7 +825,7 @@ app.post('/api/goals/:goalId/logs', authenticateToken, (req, res) => {
       });
     }
 
-    const newLog = db.createGoalLog({
+    const newLog = await db.createGoalLog({
       goal_id: goalId,
       user_id: req.user.id,
       status,
@@ -1181,39 +847,8 @@ app.post('/api/goals/:goalId/logs', authenticateToken, (req, res) => {
   }
 });
 
-// Global error handler
-app.use((error, req, res, next) => {
-  console.error('Global error handler:', error);
-
-  res.status(error.status || 500).json({
-    success: false,
-    message: error.message || 'Internal server error'
-  });
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down gracefully');
-  process.exit(0);
-});
-
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
-});
-
-// Add this endpoint for testing (REMOVE in production)
-app.post('/api/debug/auto-complete-yesterday', (req, res) => {
+// Debug endpoint
+app.post('/api/debug/auto-complete-yesterday', async (req, res) => {
   try {
     console.log('🔧 Manual auto-completion triggered via API');
 
@@ -1223,39 +858,31 @@ app.post('/api/debug/auto-complete-yesterday', (req, res) => {
 
     console.log(`📅 Processing date: ${yesterdayStr}`);
 
-    // Get all active goals
-    const allGoals = db.data.goals.filter(goal => goal.is_active);
+    const allGoals = await db.getAllActiveGoals();
     console.log(`📊 Total active goals in database: ${allGoals.length}`);
 
     let autoCompletedCount = 0;
 
-    allGoals.forEach(goal => {
+    for (const goal of allGoals) {
       console.log(`\n🎯 Checking Goal: "${goal.title}"`);
       console.log(`   Goal ID: ${goal.id}`);
       console.log(`   User ID: ${goal.user_id}`);
-      console.log(`   Created: ${goal.created_at.split('T')[0]}`);
-      console.log(`   Looking for date: ${yesterdayStr}`);
+      console.log(`   Created: ${goal.created_at.toISOString().split('T')[0]}`);
 
-      // Check if goal existed on yesterday
-      const goalCreatedDate = goal.created_at.split('T')[0];
+      const goalCreatedDate = goal.created_at.toISOString().split('T')[0];
       if (goalCreatedDate > yesterdayStr) {
         console.log(`   ⏭️  SKIPPED: Goal created AFTER ${yesterdayStr}`);
-        return;
+        continue;
       }
 
-      // Check if there's already a log for yesterday
-      const existingLog = db.data.goalLogs.find(log =>
-        log.goal_id === goal.id &&
-        log.date === yesterdayStr
-      );
+      const existingLog = await db.findGoalLog(goal.id, yesterdayStr);
 
       if (existingLog) {
-        console.log(`   ⏭️  SKIPPED: Already logged as "${existingLog.status}" for ${yesterdayStr}`);
-        return;
+        console.log(`   ⏭️  SKIPPED: Already logged as "${existingLog.status}"`);
+        continue;
       }
 
-      // No log exists for yesterday - auto-complete it as "missed"
-      const autoLog = db.createGoalLog({
+      await db.createGoalLog({
         goal_id: goal.id,
         user_id: goal.user_id,
         status: 'completed',
@@ -1264,13 +891,10 @@ app.post('/api/debug/auto-complete-yesterday', (req, res) => {
       });
 
       autoCompletedCount++;
-      console.log(`   ✅ SUCCESS: Auto-marked as MISSED for ${yesterdayStr}`);
-    });
+      console.log(`   ✅ SUCCESS: Auto-marked as COMPLETED`);
+    }
 
-    console.log(`\n🎉 SUMMARY: ${autoCompletedCount} goals auto-missed for ${yesterdayStr}`);
-    console.log(`📊 Total goals processed: ${allGoals.length}`);
-    console.log(`✅ Goals auto-missed: ${autoCompletedCount}`);
-    console.log(`⏭️  Goals skipped: ${allGoals.length - autoCompletedCount}`);
+    console.log(`\n🎉 SUMMARY: ${autoCompletedCount} goals auto-completed for ${yesterdayStr}`);
 
     res.json({
       success: true,
@@ -1293,314 +917,63 @@ app.post('/api/debug/auto-complete-yesterday', (req, res) => {
   }
 });
 
+// Global error handler
+app.use((error, req, res, next) => {
+  console.error('Global error handler:', error);
 
-// ===========================
-// 📊 HISTORY & ANALYTICS ENDPOINTS
-// ===========================
-
-// Get goal logs for a specific period
-app.get('/api/goals/:goalId/logs', authenticateToken, (req, res) => {
-  try {
-    const { goalId } = req.params;
-    const { period = 'month', limit = 365 } = req.query;
-
-    // Check if goal belongs to user
-    const goal = db.findGoalById(goalId);
-    if (!goal || goal.user_id !== req.user.id) {
-      return res.status(404).json({
-        success: false,
-        message: 'Goal not found'
-      });
-    }
-
-    // Get date range for period
-    const dateRange = getDateRangeForPeriod(period);
-
-    // Get logs within date range
-    const logs = db.data.goalLogs
-      .filter(log =>
-        log.goal_id === goalId &&
-        dateRange.start <= new Date(log.date) &&
-        new Date(log.date) <= dateRange.end
-      )
-      .sort((a, b) => new Date(b.date) - new Date(a.date))
-      .slice(0, parseInt(limit));
-
-    res.json({
-      success: true,
-      data: {
-        logs,
-        period,
-        dateRange: {
-          start: dateRange.start.toISOString().split('T')[0],
-          end: dateRange.end.toISOString().split('T')[0]
-        }
-      }
-    });
-  } catch (error) {
-    console.error('Get goal logs error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
+  res.status(error.status || 500).json({
+    success: false,
+    message: error.message || 'Internal server error'
+  });
 });
 
-// Get comprehensive goal statistics
-app.get('/api/goals/:goalId/analytics', authenticateToken, (req, res) => {
-  try {
-    const { goalId } = req.params;
-    const { period = 'month' } = req.query;
-
-    // Check if goal belongs to user
-    const goal = db.findGoalById(goalId);
-    if (!goal || goal.user_id !== req.user.id) {
-      return res.status(404).json({
-        success: false,
-        message: 'Goal not found'
-      });
-    }
-
-    const dateRange = getDateRangeForPeriod(period);
-
-    // Get logs for the period
-    const logs = db.data.goalLogs.filter(log =>
-      log.goal_id === goalId &&
-      dateRange.start <= new Date(log.date) &&
-      new Date(log.date) <= dateRange.end
-    );
-
-    // Calculate statistics
-    const stats = calculateGoalStatistics(logs, dateRange, goal);
-
-    res.json({
-      success: true,
-      data: {
-        goal: {
-          id: goal.id,
-          title: goal.title,
-          category: goal.category,
-          color: goal.color,
-          icon: goal.icon
-        },
-        period,
-        stats,
-        logs: logs.sort((a, b) => new Date(b.date) - new Date(a.date))
-      }
-    });
-  } catch (error) {
-    console.error('Get goal analytics error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  await db.close();
+  process.exit(0);
 });
 
-// Get overall user analytics
-app.get('/api/analytics/overview', authenticateToken, (req, res) => {
-  try {
-    const { period = 'month' } = req.query;
-
-    // Get user's active goals
-    const userGoals = db.data.goals.filter(goal =>
-      goal.user_id === req.user.id && goal.is_active
-    );
-
-    const dateRange = getDateRangeForPeriod(period);
-
-    // Get all logs for user's goals in the period
-    const allLogs = db.data.goalLogs.filter(log =>
-      userGoals.some(goal => goal.id === log.goal_id) &&
-      dateRange.start <= new Date(log.date) &&
-      new Date(log.date) <= dateRange.end
-    );
-
-    // Calculate overall statistics
-    const overallStats = calculateOverallStatistics(allLogs, userGoals, dateRange);
-
-    res.json({
-      success: true,
-      data: {
-        period,
-        totalGoals: userGoals.length,
-        dateRange: {
-          start: dateRange.start.toISOString().split('T')[0],
-          end: dateRange.end.toISOString().split('T')[0]
-        },
-        stats: overallStats,
-        goals: userGoals.map(goal => {
-          const goalLogs = allLogs.filter(log => log.goal_id === goal.id);
-          const goalStats = calculateGoalStatistics(goalLogs, dateRange, goal);
-
-          return {
-            ...goal,
-            stats: goalStats
-          };
-        })
-      }
-    });
-  } catch (error) {
-    console.error('Get overview analytics error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
+process.on('SIGINT', async () => {
+  console.log('SIGINT received, shutting down gracefully');
+  await db.close();
+  process.exit(0);
 });
 
-// Helper functions for analytics
-function getDateRangeForPeriod(period) {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  process.exit(1);
+});
 
-  switch (period) {
-    case 'month':
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-      return { start: startOfMonth, end: endOfMonth };
-
-    case 'quarter':
-      const quarter = Math.floor((now.getMonth()) / 3);
-      const startOfQuarter = new Date(now.getFullYear(), quarter * 3, 1);
-      const endOfQuarter = new Date(now.getFullYear(), quarter * 3 + 3, 0);
-      return { start: startOfQuarter, end: endOfQuarter };
-
-    case 'halfyear':
-      const startOfHalfYear = new Date(now.getFullYear(), now.getMonth() - 5, 1);
-      return { start: startOfHalfYear, end: today };
-
-    case 'year':
-      const startOfYear = new Date(now.getFullYear(), 0, 1);
-      return { start: startOfYear, end: today };
-
-    default:
-      return { start: today, end: today };
-  }
-}
-
-function calculateGoalStatistics(logs, dateRange, goal) {
-  const totalDays = Math.ceil((dateRange.end - dateRange.start) / (1000 * 60 * 60 * 24)) + 1;
-
-  // Count by status
-  const completed = logs.filter(log => log.status === 'completed').length;
-  const missed = logs.filter(log => log.status === 'missed').length;
-  const holiday = logs.filter(log => log.status === 'holiday').length;
-  const sick = logs.filter(log => log.status === 'sick').length;
-  const skipped = logs.filter(log => log.status === 'skipped').length;
-
-  const completionRate = totalDays > 0 ? Math.round((completed / totalDays) * 100) : 0;
-
-  // Calculate streaks
-  const sortedLogs = logs
-    .filter(log => log.status === 'completed')
-    .sort((a, b) => new Date(a.date) - new Date(b.date));
-
-  const streaks = calculateStreaks(sortedLogs);
-
-  return {
-    totalDays,
-    completed,
-    missed,
-    holiday,
-    sick,
-    skipped,
-    loggedDays: logs.length,
-    unloggedDays: totalDays - logs.length,
-    completionRate,
-    currentStreak: streaks.current,
-    longestStreak: streaks.longest
-  };
-}
-
-function calculateOverallStatistics(allLogs, goals, dateRange) {
-  const totalDays = Math.ceil((dateRange.end - dateRange.start) / (1000 * 60 * 60 * 24)) + 1;
-  const totalPossibleLogs = goals.length * totalDays;
-
-  const completed = allLogs.filter(log => log.status === 'completed').length;
-  const missed = allLogs.filter(log => log.status === 'missed').length;
-  const holiday = allLogs.filter(log => log.status === 'holiday').length;
-  const sick = allLogs.filter(log => log.status === 'sick').length;
-  const skipped = allLogs.filter(log => log.status === 'skipped').length;
-
-  const overallCompletionRate = totalPossibleLogs > 0 ?
-    Math.round((completed / totalPossibleLogs) * 100) : 0;
-
-  return {
-    totalDays,
-    completed,
-    missed,
-    holiday,
-    sick,
-    skipped,
-    totalLogs: allLogs.length,
-    totalPossibleLogs,
-    completionRate: overallCompletionRate
-  };
-}
-
-function calculateStreaks(completedLogs) {
-  if (completedLogs.length === 0) {
-    return { current: 0, longest: 0 };
-  }
-
-  let currentStreak = 0;
-  let longestStreak = 0;
-  let tempStreak = 1;
-
-  // Calculate longest streak from historical data
-  for (let i = 1; i < completedLogs.length; i++) {
-    const prevDate = new Date(completedLogs[i - 1].date);
-    const currDate = new Date(completedLogs[i].date);
-    const daysDiff = (currDate - prevDate) / (1000 * 60 * 60 * 24);
-
-    if (daysDiff === 1) {
-      tempStreak++;
-    } else {
-      longestStreak = Math.max(longestStreak, tempStreak);
-      tempStreak = 1;
-    }
-  }
-  longestStreak = Math.max(longestStreak, tempStreak);
-
-  // Calculate current streak (from today backwards)
-  const today = new Date().toISOString().split('T')[0];
-  const recentLogs = completedLogs.reverse();
-
-  for (const log of recentLogs) {
-    if (log.date === today ||
-        (new Date(today) - new Date(log.date)) / (1000 * 60 * 60 * 24) === currentStreak + 1) {
-      currentStreak++;
-    } else {
-      break;
-    }
-  }
-
-  return { current: currentStreak, longest: longestStreak };
-}
-
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+});
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
-  console.log(`✅ Database initialized: ${config.dbName}`);
-  console.log(`✅ Goals storage: ${db.data.goals.length} goals loaded`);
-  console.log(`✅ API available at: http://localhost:${PORT}`);
-  console.log('\n📊 API Endpoints:');
-  console.log('  POST /api/auth/register   - Register user');
-  console.log('  POST /api/auth/login      - Login user');
-  console.log('  GET  /api/auth/profile    - Get profile (protected)');
-  console.log('  GET  /api/auth/verify-token - Verify token (protected)');
-  console.log('  POST /api/auth/logout     - Logout (protected)');
-  console.log('  GET  /api/auth/login-attempts - Login attempts (protected)');
-  console.log('  GET  /api/auth/health     - Health check');
-  console.log('  GET  /api/goals           - Get all goals (protected)');
-  console.log('  POST /api/goals           - Create goal (protected)');
-  console.log('  GET  /api/goals/:id       - Get goal by ID (protected)');
-  console.log('  PUT  /api/goals/:id       - Update goal (protected)');
-  console.log('  DELETE /api/goals/:id     - Delete goal (protected)');
-  console.log('  GET  /api/goals/:id/stats - Get goal stats (protected)');
-  console.log('  POST /api/goals/:id/logs  - Log goal status (protected)');
+app.listen(PORT, async () => {
+  try {
+    await db.connect();
+    console.log(`✅ Server running on port ${PORT}`);
+    console.log(`✅ MongoDB Atlas connected successfully!`);
+    console.log(`✅ API available at: http://localhost:${PORT}`);
+    console.log('\n📊 API Endpoints:');
+    console.log('  POST /api/auth/register   - Register user');
+    console.log('  POST /api/auth/login      - Login user');
+    console.log('  GET  /api/auth/profile    - Get profile (protected)');
+    console.log('  GET  /api/auth/verify-token - Verify token (protected)');
+    console.log('  POST /api/auth/logout     - Logout (protected)');
+    console.log('  GET  /api/goals           - Get all goals (protected)');
+    console.log('  POST /api/goals           - Create goal (protected)');
+    console.log('  GET  /api/goals/:id       - Get goal by ID (protected)');
+    console.log('  PUT  /api/goals/:id       - Update goal (protected)');
+    console.log('  DELETE /api/goals/:id     - Delete goal (protected)');
+    console.log('  GET  /api/goals/:id/stats - Get goal stats (protected)');
+    console.log('  POST /api/goals/:id/logs  - Log goal status (protected)');
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
+  }
 });
 
 module.exports = app;
